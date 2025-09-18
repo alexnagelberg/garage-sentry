@@ -1,0 +1,16 @@
+{
+  "name": "garage-sentry",
+  "version": "1.0.0",
+  "description": "Determines if someone left the damn garage door open",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.mjs",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@google/genai": "^1.19.0"
+  }
+}
