@@ -4,13 +4,16 @@
   "description": "Determines if someone left the damn garage door open",
   "main": "index.js",
   "scripts": {
-    "start": "node index.mjs",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node src/index.mjs",
+    "prettier": "prettier -c \"{src,test}/**/*.mjs\""
   },
   "keywords": [],
   "author": "",
   "license": "ISC",
   "dependencies": {
-    "@google/genai": "^1.19.0"
+    "@google/genai": "^1.19.0",
+    "axios": "^1.12.2",
+    "jose": "^6.1.0",
+    "prettier": "^3.6.2"
   }
 }
