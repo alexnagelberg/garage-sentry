@@ -2,7 +2,7 @@ import { exec } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { importPKCS8, SignJWT } from 'jose'
 import axios from 'axios'
-import { workingDirectory } from './config.mjs'
+import { host, workingDirectory } from './config.mjs'
 
 const imagePath = '/tmp/webcam.jpg'
 
