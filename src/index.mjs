@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from '@google/genai'
+import { Ollama } from '@ollama/ollama'
 import { exec } from 'node:child_process'
 import { readFileSync } from 'fs'
 import { importPKCS8, SignJWT } from 'jose'
@@ -7,7 +8,7 @@ import axios from 'axios'
 
 const ai = new GoogleGenAI({ apiKey: genApiKey })
 
-const sendNotification = async (message, image) => {
+const sendNotification = async (message, image, door) => {
   const alg = 'RS256'
   const privateKey = await importPKCS8(readFileSync(`${workingDirectory}/private.key`).toString(), alg)
   const jwt = await new SignJWT({ prop: 'value' })
@@ -17,7 +18,7 @@ const sendNotification = async (message, image) => {
     .sign(privateKey)
   await axios.post(
     `https://${host}/api/garage/push/notify`,
-    { message },
+    { message, door },
     { headers: { Authorization: `Bearer ${jwt}` } }
   )
   /*for await (const userKey of pushoverUserKeys) {
@@ -36,10 +37,7 @@ const sendNotification = async (message, image) => {
   }*/
 }
 
-//const run = async () => {
-exec(`fswebcam -r 1280x720 --no-banner ${imagePath}`, async err => {
-  const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
-
+const runGemini = async () => {
   const contents = [
     {
       inlineData: {
@@ -82,6 +80,43 @@ exec(`fswebcam -r 1280x720 --no-banner ${imagePath}`, async err => {
   })
   console.log(response.text)
   const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = JSON.parse(response.text)
+
+  return { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked }
+}
+
+const runOllama = async () => {
+  const ollama = new Ollama({ host: 'http://rosie.local:11434' })
+  const response = await ollama.chat({
+    //      model: 'gemma3',
+    model: 'qwen3-vl:4b',
+    format: 'json',
+    messages: [
+      {
+        role: 'user',
+        content: prompt,
+        images: ['/tmp/image.jpg']
+      },
+      {
+        role: 'user',
+        content: 'output to JSON with properties leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked'
+      }
+    ]
+  })
+  console.log(`Summary: ${response.message.thinking}`)
+  //console.log(response.message.content)
+  //console.log(response.message.content.doorOpenLeft)
+  const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = JSON.parse(response.message.content)
+
+  return { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked }
+}
+
+//const run = async () => {
+exec(`fswebcam -r 1280x720 --no-banner ${imagePath}`, async err => {
+  const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
+
+  // const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runGemini()
+  const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama()
+
   const payload = {
     image: currentSnapshot,
     leftDoorOpen,
@@ -110,11 +145,11 @@ exec(`fswebcam -r 1280x720 --no-banner ${imagePath}`, async err => {
 
   if (leftDoorOpen && !leftCarParked && data.leftDoorOpen) {
     console.log('Left door open and no car parked!')
-    sendNotification('Left door open and no car parked!', currentSnapshot)
+    sendNotification('Left door open and no car parked!', currentSnapshot, 'left')
   }
   if (rightDoorOpen && !rightCarParked && data.rightDoorOpen) {
     console.log('Right door open and no car parked!')
-    sendNotification('Right door open and no car parked!', currentSnapshot)
+    sendNotification('Right door open and no car parked!', currentSnapshot, 'right')
   }
 })
 //}
