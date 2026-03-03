@@ -1,10 +1,13 @@
 import { GoogleGenAI, Type } from '@google/genai'
-import { Ollama } from '@ollama/ollama'
+import { Ollama } from 'ollama'
 import { exec } from 'node:child_process'
 import { readFileSync } from 'fs'
 import { importPKCS8, SignJWT } from 'jose'
 import { pushoverKey, pushoverUserKeys, genApiKey, workingDirectory, imagePath, model, host } from './config.mjs'
 import axios from 'axios'
+
+const interval = 5 * 60 * 1000 // 5 minutes
+//const interval = 30 * 60 * 1000 // 30 minutes for gemini
 
 const ai = new GoogleGenAI({ apiKey: genApiKey })
 
@@ -37,7 +40,8 @@ const sendNotification = async (message, image, door) => {
   }*/
 }
 
-const runGemini = async () => {
+const runGemini = async imagePath => {
+  const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
   const contents = [
     {
       inlineData: {
@@ -84,8 +88,12 @@ const runGemini = async () => {
   return { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked }
 }
 
-const runOllama = async () => {
+const runOllama = async imagePath => {
   const ollama = new Ollama({ host: 'http://rosie.local:11434' })
+  const prompt =
+    'is there a car parked on the left/right (true if image is black)? is the garage door open on the left/right (false if image is black)?'
+  const outputPrompt =
+    'output to JSON { "leftDoorOpen": BOOLEAN, "rightDoorOpen": BOOLEAN, "leftCarParked": BOOLEAN, "rightCarParked": BOOLEAN }'
   const response = await ollama.chat({
     //      model: 'gemma3',
     model: 'qwen3-vl:4b',
@@ -94,11 +102,11 @@ const runOllama = async () => {
       {
         role: 'user',
         content: prompt,
-        images: ['/tmp/image.jpg']
+        images: [imagePath]
       },
       {
         role: 'user',
-        content: 'output to JSON with properties leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked'
+        content: outputPrompt
       }
     ]
   })
@@ -110,49 +118,52 @@ const runOllama = async () => {
   return { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked }
 }
 
-//const run = async () => {
-exec(`fswebcam -r 1280x720 --no-banner ${imagePath}`, async err => {
-  const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
+// TODO: shove in try/catch
+const mainLoop = async () => {
+  exec(`fswebcam -r 1280x720 --no-banner ${imagePath}`, async err => {
+    // const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runGemini(imagePath)
+    const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama(imagePath)
 
-  // const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runGemini()
-  const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama()
+    const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
+    const payload = {
+      image: currentSnapshot,
+      leftDoorOpen,
+      rightDoorOpen,
+      leftCarParked,
+      rightCarParked
+    }
 
-  const payload = {
-    image: currentSnapshot,
-    leftDoorOpen,
-    rightDoorOpen,
-    leftCarParked,
-    rightCarParked
-  }
+    /*const leftDoorOpen = true
+    const rightDoorOpen = false
+    const leftCarParked = false
+    const rightCarParked = true
+    const currentSnapshot = readFileSync('/tmp/garage.jpg', { encoding: 'base64' })
+    const payload = { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked, image: currentSnapshot }*/
+    const alg = 'RS256'
+    const privateKey = await importPKCS8(readFileSync(`${workingDirectory}/private.key`).toString(), alg)
+    const jwt = await new SignJWT({ prop: 'value' })
+      .setProtectedHeader({ alg })
+      .setIssuedAt()
+      .setExpirationTime('1 minute')
+      .sign(privateKey)
 
-  /*const leftDoorOpen = true
-  const rightDoorOpen = false
-  const leftCarParked = false
-  const rightCarParked = true
-  const currentSnapshot = readFileSync('/tmp/garage.jpg', { encoding: 'base64' })
-  const payload = { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked, image: currentSnapshot }*/
-  const alg = 'RS256'
-  const privateKey = await importPKCS8(readFileSync(`${workingDirectory}/private.key`).toString(), alg)
-  const jwt = await new SignJWT({ prop: 'value' })
-    .setProtectedHeader({ alg })
-    .setIssuedAt()
-    .setExpirationTime('1 minute')
-    .sign(privateKey)
+    const { data } = await axios.post(`https://${host}/api/garage`, payload, {
+      headers: { Authorization: `Bearer ${jwt}` }
+    })
 
-  const { data } = await axios.post(`https://${host}/api/garage`, payload, {
-    headers: { Authorization: `Bearer ${jwt}` }
+    if (leftDoorOpen && !leftCarParked && data.leftDoorOpen) {
+      console.log('Left door open and no car parked!')
+      sendNotification('Left door open and no car parked!', currentSnapshot, 'left')
+    }
+    if (rightDoorOpen && !rightCarParked && data.rightDoorOpen) {
+      console.log('Right door open and no car parked!')
+      sendNotification('Right door open and no car parked!', currentSnapshot, 'right')
+    }
   })
 
-  if (leftDoorOpen && !leftCarParked && data.leftDoorOpen) {
-    console.log('Left door open and no car parked!')
-    sendNotification('Left door open and no car parked!', currentSnapshot, 'left')
-  }
-  if (rightDoorOpen && !rightCarParked && data.rightDoorOpen) {
-    console.log('Right door open and no car parked!')
-    sendNotification('Right door open and no car parked!', currentSnapshot, 'right')
-  }
-})
-//}
-//run()
+  setTimeout(mainLoop, interval)
+}
+
+await mainLoop()
 
 // TODO: instead of reading last value, set a timeout and run again in 5 minutes (if still open and no car, send notification)
