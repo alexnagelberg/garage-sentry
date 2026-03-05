@@ -6,6 +6,7 @@ import { importPKCS8, SignJWT } from 'jose'
 import { pushoverKey, pushoverUserKeys, genApiKey, workingDirectory, imagePath, model, host } from './config.mjs'
 import axios from 'axios'
 
+const snoozeInterval = 60 * 60 * 1000 // 1 hour
 const interval = 5 * 60 * 1000 // 5 minutes
 //const interval = 30 * 60 * 1000 // 30 minutes for gemini
 
@@ -96,7 +97,8 @@ const runOllama = async imagePath => {
     'output to JSON { "leftDoorOpen": BOOLEAN, "rightDoorOpen": BOOLEAN, "leftCarParked": BOOLEAN, "rightCarParked": BOOLEAN }'
   const response = await ollama.chat({
     //      model: 'gemma3',
-    model: 'qwen3-vl:4b',
+    //model: 'qwen3-vl:4b',
+    model: 'qwen3-vl:8b',
     format: 'json',
     messages: [
       {
@@ -120,46 +122,58 @@ const runOllama = async imagePath => {
 
 // TODO: shove in try/catch
 const mainLoop = async () => {
-  exec(`fswebcam -r 1280x720 --no-banner ${imagePath}`, async err => {
-    // const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runGemini(imagePath)
-    const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama(imagePath)
-
-    const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
-    const payload = {
-      image: currentSnapshot,
-      leftDoorOpen,
-      rightDoorOpen,
-      leftCarParked,
-      rightCarParked
+  try {
+    // Check if snoozed
+    const { data } = await axios.get(`https://${host}/api/garage/active`)
+    if (!data.active) {
+      console.log('Snoozing.')
+      setTimeout(mainLoop, snoozeInterval)
+      return
     }
 
-    /*const leftDoorOpen = true
-    const rightDoorOpen = false
-    const leftCarParked = false
-    const rightCarParked = true
-    const currentSnapshot = readFileSync('/tmp/garage.jpg', { encoding: 'base64' })
-    const payload = { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked, image: currentSnapshot }*/
-    const alg = 'RS256'
-    const privateKey = await importPKCS8(readFileSync(`${workingDirectory}/private.key`).toString(), alg)
-    const jwt = await new SignJWT({ prop: 'value' })
-      .setProtectedHeader({ alg })
-      .setIssuedAt()
-      .setExpirationTime('1 minute')
-      .sign(privateKey)
+    exec(`fswebcam -r 1280x720 --no-banner ${imagePath}`, async err => {
+      // const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runGemini(imagePath)
+      const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama(imagePath)
 
-    const { data } = await axios.post(`https://${host}/api/garage`, payload, {
-      headers: { Authorization: `Bearer ${jwt}` }
+      const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
+      const payload = {
+        image: currentSnapshot,
+        leftDoorOpen,
+        rightDoorOpen,
+        leftCarParked,
+        rightCarParked
+      }
+
+      /*const leftDoorOpen = true
+      const rightDoorOpen = false
+      const leftCarParked = false
+      const rightCarParked = true
+      const currentSnapshot = readFileSync('/tmp/garage.jpg', { encoding: 'base64' })
+      const payload = { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked, image: currentSnapshot }*/
+      const alg = 'RS256'
+      const privateKey = await importPKCS8(readFileSync(`${workingDirectory}/private.key`).toString(), alg)
+      const jwt = await new SignJWT({ prop: 'value' })
+        .setProtectedHeader({ alg })
+        .setIssuedAt()
+        .setExpirationTime('1 minute')
+        .sign(privateKey)
+
+      const { data } = await axios.post(`https://${host}/api/garage`, payload, {
+        headers: { Authorization: `Bearer ${jwt}` }
+      })
+
+      if (leftDoorOpen && !leftCarParked && data.leftDoorOpen) {
+        console.log('Left door open and no car parked!')
+        sendNotification('Left door open and no car parked!', currentSnapshot, 'left')
+      }
+      if (rightDoorOpen && !rightCarParked && data.rightDoorOpen) {
+        console.log('Right door open and no car parked!')
+        sendNotification('Right door open and no car parked!', currentSnapshot, 'right')
+      }
     })
-
-    if (leftDoorOpen && !leftCarParked && data.leftDoorOpen) {
-      console.log('Left door open and no car parked!')
-      sendNotification('Left door open and no car parked!', currentSnapshot, 'left')
-    }
-    if (rightDoorOpen && !rightCarParked && data.rightDoorOpen) {
-      console.log('Right door open and no car parked!')
-      sendNotification('Right door open and no car parked!', currentSnapshot, 'right')
-    }
-  })
+  } catch (e) {
+    console.error(e)
+  }
 
   setTimeout(mainLoop, interval)
 }
