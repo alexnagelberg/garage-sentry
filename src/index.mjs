@@ -1,6 +1,7 @@
 import { GoogleGenAI, Type } from '@google/genai'
 import { Ollama } from 'ollama'
 import { exec } from 'node:child_process'
+import { promisify } from 'node:util'
 import { readFileSync } from 'fs'
 import { importPKCS8, SignJWT } from 'jose'
 import { pushoverKey, pushoverUserKeys, genApiKey, workingDirectory, imagePath, model, host } from './config.mjs'
@@ -10,8 +11,11 @@ const snoozeInterval = 60 * 60 * 1000 // 1 hour
 const interval = 5 * 60 * 1000 // 5 minutes
 //const interval = 30 * 60 * 1000 // 30 minutes for gemini
 
-const ai = new GoogleGenAI({ apiKey: genApiKey })
+const execAsync = promisify(exec)
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms))
 
+const ai = new GoogleGenAI({ apiKey: genApiKey })
+// TOOD: clean up ollama object, try catches, etc. in main loop
 const sendNotification = async (message, image, door) => {
   const alg = 'RS256'
   const privateKey = await importPKCS8(readFileSync(`${workingDirectory}/private.key`).toString(), alg)
@@ -91,16 +95,32 @@ const runGemini = async imagePath => {
 
 const runOllama = async imagePath => {
   const ollama = new Ollama({ host: 'http://rosie.local:11434' })
-  const prompt =
-    'is there a car parked on the left/right (true if image is black)? is the garage door open on the left/right (false if image is black)?'
+  /*const prompt =
+    'is there a car parked on the left/right (true if image is black)? is the garage door open on the left/right (false if image is black)?'*/
+  const prompt = `
+The image shows two garage doors.
+
+Rules:
+- leftDoorOpen: true if the left garage door is visibly open, otherwise false.
+- rightDoorOpen: true if the right garage door is visibly open, otherwise false.
+- leftCarParked: true if a car is visible in or directly in front of the left garage bay, otherwise false.
+- rightCarParked: true if a car is visible in or directly in front of the right garage bay, otherwise false.
+- Use only the current image.
+`
+
   const outputPrompt =
     'output to JSON { "leftDoorOpen": BOOLEAN, "rightDoorOpen": BOOLEAN, "leftCarParked": BOOLEAN, "rightCarParked": BOOLEAN }'
   const response = await ollama.chat({
     //      model: 'gemma3',
     //model: 'qwen3-vl:4b',
-    model: 'qwen3-vl:8b',
+    //model: 'qwen3-vl:8b',
+    model: 'qwen3.5:4b',
     format: 'json',
     messages: [
+      {
+        role: 'system',
+        content: 'Classify this fixed garage webcam image.'
+      },
       {
         role: 'user',
         content: prompt,
@@ -121,63 +141,87 @@ const runOllama = async imagePath => {
 }
 
 // TODO: shove in try/catch
-const mainLoop = async () => {
-  try {
-    // Check if snoozed
-    const { data } = await axios.get(`https://${host}/api/garage/active`)
-    if (!data.active) {
-      console.log('Snoozing.')
-      setTimeout(mainLoop, snoozeInterval)
-      return
-    }
-
-    exec(`fswebcam -r 1280x720 --no-banner ${imagePath}`, async err => {
-      // const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runGemini(imagePath)
-      const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama(imagePath)
-
-      const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
-      const payload = {
-        image: currentSnapshot,
-        leftDoorOpen,
-        rightDoorOpen,
-        leftCarParked,
-        rightCarParked
-      }
-
-      /*const leftDoorOpen = true
-      const rightDoorOpen = false
-      const leftCarParked = false
-      const rightCarParked = true
-      const currentSnapshot = readFileSync('/tmp/garage.jpg', { encoding: 'base64' })
-      const payload = { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked, image: currentSnapshot }*/
-      const alg = 'RS256'
-      const privateKey = await importPKCS8(readFileSync(`${workingDirectory}/private.key`).toString(), alg)
-      const jwt = await new SignJWT({ prop: 'value' })
-        .setProtectedHeader({ alg })
-        .setIssuedAt()
-        .setExpirationTime('1 minute')
-        .sign(privateKey)
-
-      const { data } = await axios.post(`https://${host}/api/garage`, payload, {
-        headers: { Authorization: `Bearer ${jwt}` }
-      })
-
-      if (leftDoorOpen && !leftCarParked && data.leftDoorOpen) {
-        console.log('Left door open and no car parked!')
-        sendNotification('Left door open and no car parked!', currentSnapshot, 'left')
-      }
-      if (rightDoorOpen && !rightCarParked && data.rightDoorOpen) {
-        console.log('Right door open and no car parked!')
-        sendNotification('Right door open and no car parked!', currentSnapshot, 'right')
-      }
-    })
-  } catch (e) {
-    console.error(e)
+const runIteration = async () => {
+  // Check if snoozed
+  const { data: activeData } = await axios.get(`https://${host}/api/garage/active`)
+  if (!activeData.active) {
+    console.log('Snoozing.')
+    return snoozeInterval
   }
 
-  setTimeout(mainLoop, interval)
+  await execAsync(`fswebcam -r 1280x720 --no-banner ${imagePath}`)
+
+  // const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runGemini(imagePath)
+  const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama(imagePath)
+
+  const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
+  const payload = {
+    image: currentSnapshot,
+    leftDoorOpen,
+    rightDoorOpen,
+    leftCarParked,
+    rightCarParked
+  }
+
+  /*const leftDoorOpen = true
+  const rightDoorOpen = false
+  const leftCarParked = false
+  const rightCarParked = true
+  const currentSnapshot = readFileSync('/tmp/garage.jpg', { encoding: 'base64' })
+  const payload = { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked, image: currentSnapshot }*/
+  const alg = 'RS256'
+  const privateKey = await importPKCS8(readFileSync(`${workingDirectory}/private.key`).toString(), alg)
+  const jwt = await new SignJWT({ prop: 'value' })
+    .setProtectedHeader({ alg })
+    .setIssuedAt()
+    .setExpirationTime('1 minute')
+    .sign(privateKey)
+
+  const { data } = await axios.post(`https://${host}/api/garage`, payload, {
+    headers: { Authorization: `Bearer ${jwt}` }
+  })
+
+  if (leftDoorOpen && !leftCarParked && data.leftDoorOpen) {
+    console.log('Left door open and no car parked!')
+    try {
+      await sendNotification('Left door open and no car parked!', currentSnapshot, 'left')
+    } catch (e) {
+      console.error('Error sending left notification', e)
+    }
+  }
+  if (rightDoorOpen && !rightCarParked && data.rightDoorOpen) {
+    console.log('Right door open and no car parked!')
+    try {
+      await sendNotification('Right door open and no car parked!', currentSnapshot, 'right')
+    } catch (e) {
+      console.error('Error sending right notification', e)
+    }
+  }
+
+  return interval
 }
 
-await mainLoop()
+const mainLoop = async () => {
+  while (true) {
+    let nextDelay = interval
+    try {
+      nextDelay = await runIteration()
+    } catch (e) {
+      console.error('Iteration failed', e)
+    }
+
+    await delay(nextDelay)
+  }
+}
+
+process.on('unhandledRejection', e => {
+  console.error('Unhandled promise rejection', e)
+})
+
+process.on('uncaughtException', e => {
+  console.error('Uncaught exception', e)
+})
+
+void mainLoop()
 
 // TODO: instead of reading last value, set a timeout and run again in 5 minutes (if still open and no car, send notification)
