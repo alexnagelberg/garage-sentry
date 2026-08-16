@@ -4,7 +4,16 @@ import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
 import { readFileSync } from 'node:fs'
 import { importPKCS8, SignJWT } from 'jose'
-import { pushoverKey, pushoverUserKeys, genApiKey, workingDirectory, imagePath, model, host } from './config.mjs'
+import {
+  pushoverKey,
+  pushoverUserKeys,
+  genApiKey,
+  workingDirectory,
+  imagePath,
+  model,
+  host,
+  lmsToken
+} from './config.mjs'
 import axios from 'axios'
 
 const snoozeInterval = 60 * 60 * 1000 // 1 hour
@@ -189,7 +198,6 @@ Rules:
 - Use only the current image.
 `
 
-  const token = ``
   const model = 'google/gemma-4-31b-qat'
   const image = readFileSync(imagePath, { encoding: 'base64' })
   const { data } = await axios.post(
@@ -202,7 +210,7 @@ Rules:
       ],
       ...schema
     },
-    { headers: { Authorization: `Bearer ${token}` } }
+    { headers: { Authorization: `Bearer ${lmsToken}` } }
   )
   const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = JSON.parse(data.choices[0].message.content)
   return { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked }
