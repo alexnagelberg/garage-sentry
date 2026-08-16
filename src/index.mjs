@@ -2,7 +2,7 @@ import { GoogleGenAI, Type } from '@google/genai'
 import { Ollama } from 'ollama'
 import { exec } from 'node:child_process'
 import { promisify } from 'node:util'
-import { readFileSync } from 'fs'
+import { readFileSync } from 'node:fs'
 import { importPKCS8, SignJWT } from 'jose'
 import { pushoverKey, pushoverUserKeys, genApiKey, workingDirectory, imagePath, model, host } from './config.mjs'
 import axios from 'axios'
@@ -94,7 +94,15 @@ const runGemini = async imagePath => {
 }
 
 const runOllama = async imagePath => {
-  const ollama = new Ollama({ host: 'http://rosie.local:11434' })
+  const ollama = new Ollama({
+    host: 'http://rosie.local:11434',
+    fetch: (input, init = {}) => {
+      return fetch(input, {
+        ...init,
+        signal: AbortSignal.timeout(15 * 60 * 1000) // 15 minutes
+      })
+    }
+  })
   /*const prompt =
     'is there a car parked on the left/right (true if image is black)? is the garage door open on the left/right (false if image is black)?'*/
   const prompt = `
@@ -140,6 +148,66 @@ Rules:
   return { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked }
 }
 
+const runLmStudio = async imagePath => {
+  const schema = {
+    response_format: {
+      type: 'json_schema',
+      json_schema: {
+        name: 'garage_status',
+        strict: true,
+        schema: {
+          type: 'object',
+          properties: {
+            leftDoorOpen: {
+              type: 'boolean'
+            },
+            rightDoorOpen: {
+              type: 'boolean'
+            },
+            leftCarParked: {
+              type: 'boolean'
+            },
+            rightCarParked: {
+              type: 'boolean'
+            }
+          },
+          required: ['leftDoorOpen', 'rightDoorOpen', 'leftCarParked', 'rightCarParked'],
+          additionalProperties: false
+        }
+      }
+    }
+  }
+
+  const prompt = `
+The image shows two garage doors.
+
+Rules:
+- leftDoorOpen: true if the left garage door is visibly open, otherwise false.
+- rightDoorOpen: true if the right garage door is visibly open, otherwise false.
+- leftCarParked: true if a car is visible in or directly in front of the left garage bay, otherwise false.
+- rightCarParked: true if a car is visible in or directly in front of the right garage bay, otherwise false.
+- Use only the current image.
+`
+
+  const token = ``
+  const model = 'google/gemma-4-31b-qat'
+  const image = readFileSync(imagePath, { encoding: 'base64' })
+  const { data } = await axios.post(
+    `http://studio.local:1234/v1/chat/completions`,
+    {
+      model,
+      messages: [
+        { role: 'system', content: prompt },
+        { role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image}` } }] }
+      ],
+      ...schema
+    },
+    { headers: { Authorization: `Bearer ${token}` } }
+  )
+  const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = JSON.parse(data.choices[0].message.content)
+  return { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked }
+}
+
 // TODO: shove in try/catch
 const runIteration = async () => {
   // Check if snoozed
@@ -152,7 +220,8 @@ const runIteration = async () => {
   await execAsync(`fswebcam -r 1280x720 --no-banner ${imagePath}`)
 
   // const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runGemini(imagePath)
-  const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama(imagePath)
+  //const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama(imagePath)
+  const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runLmStudio(imagePath)
 
   const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
   const payload = {
