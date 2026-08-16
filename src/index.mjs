@@ -188,7 +188,7 @@ const runLmStudio = async imagePath => {
   }
 
   const prompt = `
-The image shows two garage doors.
+The image shows two garage doors. Determine if any are open and cars are parked.
 
 Rules:
 - leftDoorOpen: true if the left garage door is visibly open, otherwise false.
@@ -199,6 +199,7 @@ Rules:
 `
 
   const model = 'google/gemma-4-31b-qat'
+  //const model = 'qwen/qwen3.6-35b-a3b'
   const image = readFileSync(imagePath, { encoding: 'base64' })
   const { data } = await axios.post(
     `http://studio.local:1234/v1/chat/completions`,
