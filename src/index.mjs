@@ -209,6 +209,7 @@ Rules:
         { role: 'system', content: prompt },
         { role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image}` } }] }
       ],
+      temperature: 0,
       ...schema
     },
     { headers: { Authorization: `Bearer ${lmsToken}` } }
