@@ -104,7 +104,7 @@ const runGemini = async imagePath => {
 
 const runOllama = async imagePath => {
   const ollama = new Ollama({
-    host: 'http://rosie.local:11434',
+    host: 'http://studio.local:11434',
     fetch: (input, init = {}) => {
       return fetch(input, {
         ...init,
@@ -131,8 +131,30 @@ Rules:
     //      model: 'gemma3',
     //model: 'qwen3-vl:4b',
     //model: 'qwen3-vl:8b',
-    model: 'qwen3.5:4b',
-    format: 'json',
+    //model: 'qwen3.5:4b',
+    model: 'qwen3.8',
+    //model: 'minicpm-v4.5',
+    //format: 'json',
+    format: {
+      type: 'object',
+      properties: {
+        leftDoorOpen: {
+          type: 'boolean'
+        },
+        rightDoorOpen: {
+          type: 'boolean'
+        },
+        leftCarParked: {
+          type: 'boolean'
+        },
+        rightCarParked: {
+          type: 'boolean'
+        }
+      },
+      required: ['leftDoorOpen', 'rightDoorOpen', 'leftCarParked', 'rightCarParked']
+    },
+    options: { seed: 42, top_k: 1, temperature: 0 },
+    think: 'max',
     messages: [
       {
         role: 'system',
@@ -150,6 +172,7 @@ Rules:
     ]
   })
   console.log(`Summary: ${response.message.thinking}`)
+  console.log(`Content: ${response.message.content}`)
   //console.log(response.message.content)
   //console.log(response.message.content.doorOpenLeft)
   const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = JSON.parse(response.message.content)
@@ -210,6 +233,7 @@ Rules:
         { role: 'user', content: [{ type: 'image_url', image_url: { url: `data:image/jpeg;base64,${image}` } }] }
       ],
       temperature: 0,
+      top_k: 0,
       ...schema
     },
     { headers: { Authorization: `Bearer ${lmsToken}` } }
@@ -230,8 +254,8 @@ const runIteration = async () => {
   await execAsync(`fswebcam -r 1280x720 --no-banner ${imagePath}`)
 
   // const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runGemini(imagePath)
-  //const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama(imagePath)
-  const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runLmStudio(imagePath)
+  const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runOllama(imagePath)
+  //const { leftDoorOpen, rightDoorOpen, leftCarParked, rightCarParked } = await runLmStudio(imagePath)
 
   const currentSnapshot = readFileSync(imagePath, { encoding: 'base64' })
   const payload = {
